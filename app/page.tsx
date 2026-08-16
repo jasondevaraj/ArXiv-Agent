@@ -307,11 +307,22 @@ export default function Home() {
               </h1>
             </div>
             <nav className="hidden md:flex items-center gap-6 text-sm">
-              <button className="font-semibold px-3 py-1.5 rounded-lg transition" style={{ 
-                backgroundColor: 'var(--bg-secondary)',
-                color: 'var(--text-orange)',
-                border: '1px solid var(--border-orange)'
-              }}>
+              <button 
+                onClick={() => {
+                  setPapers([]);
+                  setThemes([]);
+                  setSelectedTheme(null);
+                  setSearchedTopic("");
+                  setTopic("");
+                  setError("");
+                  setExpandedAbstracts(new Set());
+                }}
+                className="font-semibold px-3 py-1.5 rounded-lg transition" 
+                style={{ 
+                  backgroundColor: 'var(--bg-secondary)',
+                  color: 'var(--text-orange)',
+                  border: '1px solid var(--border-orange)'
+                }}>
                 Research
               </button>
               <button 
