@@ -4,22 +4,43 @@
 
 @layer base {
   :root {
-    --bg-ivory: #faf9f7;
-    --card-white: #ffffff;
-    --text-charcoal: #2d3436;
-    --text-gray: #636e72;
-    --text-light: #b2bec3;
-    --accent-forest: #2d7053;
-    --accent-sage: #7d9b7a;
-    --accent-terracotta: #c87856;
-    --border-light: #e8e6e3;
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
-    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+    /* Dark theme with orange accents */
+    --bg-primary: #0B0B0B;
+    --bg-card: #151515;
+    --bg-secondary: #1C1C1C;
+    --bg-elevated: #1F1F1F;
+    
+    --border-primary: #2A2A2A;
+    --border-subtle: #1E1E1E;
+    --border-orange: #FF8A00;
+    
+    --text-orange: #FF8A00;
+    --text-orange-bright: #FFA31A;
+    --text-primary: #D6D6D6;
+    --text-secondary: #999999;
+    --text-muted: #6B6B6B;
+    
+    --orange-primary: #FF8A00;
+    --orange-hover: #E67A00;
+    --orange-bright: #FFA31A;
+    --orange-dark: #CC6E00;
+    
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.7);
+    --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.8);
+    --shadow-orange: 0 4px 12px rgba(255, 138, 0, 0.3);
   }
   
   body {
-    background-color: var(--bg-ivory);
-    color: var(--text-charcoal);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
+}
+
+/* Remove old gradient utilities */
+@layer utilities {
+  .bg-orange-gradient {
+    background-color: var(--orange-primary);
   }
 }

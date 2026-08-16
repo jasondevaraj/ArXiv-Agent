@@ -11,280 +11,415 @@ interface ArxivPaper {
   arxivUrl: string;
 }
 
-// Helper function to extract key terms from a query
-function extractKeyTerms(query: string): string[] {
-  // Split into words and filter meaningful terms
-  const words = query
+/*
+ * ---------------------------------------------------------
+ * SEARCH TERM PROCESSING
+ * ---------------------------------------------------------
+ */
+
+const STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "using",
+  "based",
+  "into",
+  "about",
+  "through",
+  "via",
+  "study",
+  "research",
+  "paper",
+  "papers",
+  "work",
+  "new",
+  "novel",
+  "an",
+  "of",
+  "in",
+  "on",
+  "to",
+  "a",
+]);
+
+function normalizeText(text: string): string {
+  return text
     .toLowerCase()
-    .split(/\s+/)
-    .filter(word => word.length > 2); // Keep words longer than 2 chars
-  
-  // Common stop words to exclude
-  const stopWords = new Set(['the', 'and', 'for', 'with', 'are', 'from', 'that', 'this']);
-  
-  return words.filter(word => !stopWords.has(word));
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// Helper function to identify concept groups and build a concept-aware query
-function buildConceptAwareQuery(query: string): { 
-  conceptQueries: string[], 
-  primaryIndex: number | null,
-  groupNames: string[]
-} {
-  const queryLower = query.toLowerCase();
-  
-  // Define concept groups with synonyms and priority
-  const conceptGroups = [
-    // Animal/veterinary concepts - PRIMARY (specific entity/subject)
-    {
-      name: 'animal',
-      priority: 'primary', // Never drop this in fallback
-      primary: ['dog', 'canine', 'veterinary', 'pet'],
-      expanded: ['dogs', 'canines', 'feline', 'cat', 'cats', 'livestock', 'equine', 'bovine', 'animal']
-    },
-    // Skin/dermatology concepts - SECONDARY (domain-specific)
-    {
-      name: 'skin',
-      priority: 'secondary',
-      primary: ['skin', 'dermatology', 'dermatological', 'cutaneous', 'dermatitis'],
-      expanded: ['lesion', 'lesions', 'rash', 'epidermis', 'dermis', 'melanoma']
-    },
-    // Disease/diagnosis concepts - GENERIC (broad medical term)
-    {
-      name: 'disease',
-      priority: 'generic',
-      primary: ['disease', 'diagnosis', 'diagnostic', 'condition', 'disorder'],
-      expanded: ['pathology', 'syndrome', 'infection', 'illness']
-    },
-    // Deep learning/AI concepts - PRIMARY
-    {
-      name: 'deep_learning',
-      priority: 'primary',
-      primary: ['deep learning', 'machine learning', 'neural network', 'cnn', 'convolutional'],
-      expanded: ['artificial intelligence', 'ai', 'deep', 'learning', 'model', 'classification']
-    },
-    // LLM/Tool concepts - PRIMARY
-    {
-      name: 'llm',
-      priority: 'primary',
-      primary: ['llm', 'large language model', 'tool use', 'tool-use', 'function calling'],
-      expanded: ['agent', 'gpt', 'language model', 'api', 'tool']
-    },
-    // Agent/multi-agent concepts - PRIMARY
-    {
-      name: 'agent',
-      priority: 'primary',
-      primary: ['agent', 'multi-agent', 'multi agent', 'agentic'],
-      expanded: ['agents', 'coordination', 'collaboration', 'distributed']
-    },
-    // Computer vision concepts - PRIMARY
-    {
-      name: 'computer_vision',
-      priority: 'primary',
-      primary: ['computer vision', 'image processing', 'visual'],
-      expanded: ['vision', 'image', 'object detection', 'segmentation']
-    },
-    // Quantum computing concepts - PRIMARY
-    {
-      name: 'quantum',
-      priority: 'primary',
-      primary: ['quantum computing', 'quantum', 'qubit'],
-      expanded: ['quantum algorithm', 'quantum circuit', 'superposition']
-    }
-  ];
-  
-  // Find which concept groups match the query
-  const matchedGroups: { group: typeof conceptGroups[0], index: number }[] = [];
-  
-  conceptGroups.forEach((group, index) => {
-    // Check if any primary term matches
-    const primaryMatch = group.primary.some(term => queryLower.includes(term));
-    if (primaryMatch) {
-      matchedGroups.push({ group, index });
-    }
-  });
-  
-  // If no concept groups matched, extract individual terms
-  if (matchedGroups.length === 0) {
-    const terms = extractKeyTerms(query);
-    return {
-      conceptQueries: terms.map(term => `(ti:${term} OR abs:${term})`),
-      primaryIndex: null,
-      groupNames: []
-    };
+function extractTerms(query: string): string[] {
+  return normalizeText(query)
+    .split(" ")
+    .filter((word) => word.length > 2 && !STOP_WORDS.has(word));
+}
+
+/*
+ * ---------------------------------------------------------
+ * CONTROLLED SYNONYMS
+ *
+ * These are only used when the corresponding term is
+ * actually present in the user's query.
+ *
+ * This prevents "disease" from turning into every disease.
+ * ---------------------------------------------------------
+ */
+
+const SYNONYMS: Record<string, string[]> = {
+  dog: ["dog", "dogs", "canine", "canines"],
+  dogs: ["dog", "dogs", "canine", "canines"],
+  canine: ["dog", "dogs", "canine", "canines"],
+  canines: ["dog", "dogs", "canine", "canines"],
+
+  cat: ["cat", "cats", "feline", "felines"],
+  cats: ["cat", "cats", "feline", "felines"],
+  feline: ["cat", "cats", "feline", "felines"],
+
+  plant: ["plant", "plants", "crop", "crops", "botanical"],
+  plants: ["plant", "plants", "crop", "crops", "botanical"],
+
+  skin: ["skin", "cutaneous", "dermatological", "dermatology"],
+  dermatology: ["skin", "cutaneous", "dermatological", "dermatology"],
+  dermatological: ["skin", "cutaneous", "dermatological", "dermatology"],
+
+  disease: ["disease", "diseases"],
+  diseases: ["disease", "diseases"],
+
+  diagnosis: ["diagnosis", "diagnostic", "diagnosing"],
+  diagnostic: ["diagnosis", "diagnostic", "diagnosing"],
+
+  classification: ["classification", "classifying", "classifier"],
+  classify: ["classification", "classifying", "classifier"],
+
+  detection: ["detection", "detecting", "detector"],
+
+  segmentation: ["segmentation", "segmenting"],
+
+  learning: ["learning"],
+  "deep-learning": ["deep learning", "deep-learning"],
+  "deep": ["deep learning", "deep-learning"],
+
+  machine: ["machine learning", "machine-learning"],
+  "machine-learning": ["machine learning", "machine-learning"],
+
+  llm: ["llm", "large language model", "large-language-model"],
+  agent: ["agent", "agents", "agentic"],
+  agents: ["agent", "agents", "agentic"],
+
+  multimodal: ["multimodal", "multi-modal"],
+
+  transformer: ["transformer", "transformers"],
+
+  vision: ["vision", "visual"],
+};
+
+/*
+ * Only expand terms that have a safe, direct synonym.
+ *
+ * We intentionally DO NOT expand generic words such as:
+ * disease -> pathology / syndrome / infection
+ *
+ * because that creates unrelated results.
+ */
+function getTermVariants(term: string): string[] {
+  const normalized = term.toLowerCase();
+
+  if (SYNONYMS[normalized]) {
+    return SYNONYMS[normalized];
   }
-  
-  // Identify primary concept (entity/subject that must never be dropped)
-  let primaryIndex: number | null = null;
-  const primaryGroup = matchedGroups.find(mg => mg.group.priority === 'primary');
-  if (primaryGroup) {
-    primaryIndex = matchedGroups.indexOf(primaryGroup);
+
+  return [normalized];
+}
+
+/*
+ * ---------------------------------------------------------
+ * BUILD A GENERALIZED QUERY
+ *
+ * Example:
+ *
+ * "Dog Skin Disease"
+ *
+ * becomes approximately:
+ *
+ * (dog OR dogs OR canine OR canines)
+ * AND
+ * (skin OR cutaneous OR dermatological OR dermatology)
+ * AND
+ * (disease OR diseases)
+ *
+ * Every important user concept must remain present.
+ *
+ * We do NOT drop concepts just because arXiv returns
+ * fewer papers.
+ * ---------------------------------------------------------
+ */
+
+function buildSearchQuery(query: string): string {
+  const terms = extractTerms(query);
+
+  if (terms.length === 0) {
+    return `ti:"${query}" OR abs:"${query}"`;
   }
-  
-  // Build query requiring concepts to appear together
-  const conceptQueries = matchedGroups.map(({ group }) => {
-    const termGroup = [...group.primary, ...group.expanded].map(term => {
-      // Handle multi-word phrases
-      if (term.includes(' ')) {
-        return `ti:"${term}" OR abs:"${term}"`;
+
+  const groups = terms.map((term) => {
+    const variants = getTermVariants(term);
+
+    const variantQueries = variants.map((variant) => {
+      if (variant.includes(" ")) {
+        return `(ti:"${variant}" OR abs:"${variant}")`;
       }
-      return `ti:${term} OR abs:${term}`;
-    }).join(' OR ');
-    return `(${termGroup})`;
+
+      return `(ti:${variant} OR abs:${variant})`;
+    });
+
+    return `(${variantQueries.join(" OR ")})`;
   });
-  
-  const groupNames = matchedGroups.map(mg => mg.group.name);
-  
-  // Return concept queries with metadata
-  return { conceptQueries, primaryIndex, groupNames };
+
+  return groups.join(" AND ");
 }
 
-// Helper function to rank papers by relevance and recency
-function rankPapers(papers: ArxivPaper[], query: string): ArxivPaper[] {
-  const queryLower = query.toLowerCase();
-  const queryTerms = extractKeyTerms(query);
-  const fiveYearsAgo = new Date();
-  fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5);
-  
-  // Identify primary entity/subject terms that MUST be present
-  const primaryTerms = ['dog', 'canine', 'canines', 'dogs', 'veterinary', 'pet', 
-                        'feline', 'cat', 'cats', 'equine', 'bovine', 'livestock'];
-  const hasPrimaryTerm = primaryTerms.some(term => queryLower.includes(term));
-  
-  const scoredPapers = papers.map(paper => {
-    const titleLower = paper.title.toLowerCase();
-    const abstractLower = paper.abstract.toLowerCase();
-    const publishedDate = new Date(paper.published);
-    
+/*
+ * ---------------------------------------------------------
+ * RELEVANCE SCORING
+ *
+ * Search results are ranked against the ACTUAL USER QUERY.
+ *
+ * A paper that doesn't contain the important query concepts
+ * receives a strong penalty.
+ * ---------------------------------------------------------
+ */
+
+function rankPapers(
+  papers: ArxivPaper[],
+  query: string
+): ArxivPaper[] {
+  const terms = extractTerms(query);
+  const normalizedQuery = normalizeText(query);
+
+  const scored = papers.map((paper) => {
+    const title = normalizeText(paper.title);
+    const abstract = normalizeText(paper.abstract);
+    const combined = `${title} ${abstract}`;
+
     let score = 0;
-    
-    // CRITICAL: If query has a primary entity term (like 'dog'), the paper MUST contain it
-    if (hasPrimaryTerm) {
-      const paperHasPrimary = primaryTerms.some(term => 
-        titleLower.includes(term) || abstractLower.includes(term)
-      );
-      
-      if (!paperHasPrimary) {
-        // Paper doesn't contain the primary entity - heavily penalize
-        score -= 1000;
-      } else {
-        // Bonus for having the primary term in title
-        const titleHasPrimary = primaryTerms.some(term => titleLower.includes(term));
-        if (titleHasPrimary) {
-          score += 50;
-        }
-      }
-    }
-    
-    // Exact phrase match in title (highest weight)
-    if (titleLower.includes(queryLower)) {
+
+    /*
+     * Exact complete query
+     */
+    if (title.includes(normalizedQuery)) {
       score += 100;
     }
-    
-    // Exact phrase match in abstract (high weight)
-    if (abstractLower.includes(queryLower)) {
+
+    if (abstract.includes(normalizedQuery)) {
       score += 50;
     }
-    
-    // Individual term matches in title
-    queryTerms.forEach(term => {
-      if (titleLower.includes(term)) {
-        score += 10;
+
+    /*
+     * Each original user concept matters.
+     *
+     * A paper should contain most of the actual query,
+     * not merely the generic word "disease".
+     */
+    let matchedTerms = 0;
+
+    for (const term of terms) {
+      const variants = getTermVariants(term);
+
+      const matched = variants.some((variant) => {
+        const normalizedVariant = normalizeText(variant);
+        return combined.includes(normalizedVariant);
+      });
+
+      if (matched) {
+        matchedTerms++;
+
+        if (title.includes(term)) {
+          score += 20;
+        } else {
+          score += 8;
+        }
+      } else {
+        /*
+         * Missing a user-provided concept is a significant
+         * relevance problem.
+         */
+        score -= 35;
       }
-    });
-    
-    // Individual term matches in abstract
-    queryTerms.forEach(term => {
-      if (abstractLower.includes(term)) {
-        score += 3;
-      }
-    });
-    
-    // Recency bonus (prefer last 5 years)
-    if (publishedDate > fiveYearsAgo) {
-      const yearsAgo = (Date.now() - publishedDate.getTime()) / (1000 * 60 * 60 * 24 * 365);
-      score += Math.max(0, 20 - yearsAgo * 4); // Decay over 5 years
     }
-    
-    return { paper, score };
+
+    /*
+     * Reward papers containing most/all requested concepts.
+     */
+    const coverage =
+      terms.length > 0 ? matchedTerms / terms.length : 1;
+
+    score += coverage * 50;
+
+    /*
+     * Recency is only a secondary ranking factor.
+     * Relevance always comes first.
+     */
+    const publishedDate = new Date(paper.published);
+
+    if (!Number.isNaN(publishedDate.getTime())) {
+      const ageInYears =
+        (Date.now() - publishedDate.getTime()) /
+        (1000 * 60 * 60 * 24 * 365);
+
+      if (ageInYears <= 1) {
+        score += 12;
+      } else if (ageInYears <= 3) {
+        score += 8;
+      } else if (ageInYears <= 5) {
+        score += 4;
+      }
+    }
+
+    return {
+      paper,
+      score,
+      coverage,
+    };
   });
-  
-  // Sort by score descending and filter out heavily penalized papers
-  const filteredPapers = scoredPapers.filter(sp => sp.score > -500);
-  filteredPapers.sort((a, b) => b.score - a.score);
-  
-  return filteredPapers.map(sp => sp.paper);
+
+  /*
+   * Only keep papers that cover enough of the user's query.
+   *
+   * For a 3-term query, at least 2 concepts should appear.
+   * For a 2-term query, both should appear.
+   */
+  const minimumCoverage =
+    terms.length >= 3 ? 2 / terms.length : 1;
+
+  const relevant = scored.filter(
+    (item) => item.coverage >= minimumCoverage
+  );
+
+  relevant.sort((a, b) => b.score - a.score);
+
+  return relevant.map((item) => item.paper);
 }
 
-// Fetch papers with a given search query
-async function fetchPapers(searchQuery: string, maxResults: number): Promise<ArxivPaper[]> {
-  const arxivApiUrl = new URL("https://export.arxiv.org/api/query");
-  arxivApiUrl.searchParams.set("search_query", searchQuery);
-  arxivApiUrl.searchParams.set("start", "0");
-  arxivApiUrl.searchParams.set("max_results", maxResults.toString());
-  arxivApiUrl.searchParams.set("sortBy", "relevance");
-  arxivApiUrl.searchParams.set("sortOrder", "descending");
-  
-  const response = await fetch(arxivApiUrl.toString(), {
+/*
+ * ---------------------------------------------------------
+ * ARXIV API
+ * ---------------------------------------------------------
+ */
+
+async function fetchPapers(
+  searchQuery: string,
+  maxResults: number
+): Promise<ArxivPaper[]> {
+  const url = new URL("https://export.arxiv.org/api/query");
+
+  url.searchParams.set("search_query", searchQuery);
+  url.searchParams.set("start", "0");
+  url.searchParams.set("max_results", maxResults.toString());
+
+  /*
+   * Relevance is useful because the query itself already
+   * contains the user's concepts.
+   */
+  url.searchParams.set("sortBy", "relevance");
+  url.searchParams.set("sortOrder", "descending");
+
+  const response = await fetch(url.toString(), {
     headers: {
       "User-Agent": "ArxivDigestAgent/1.0",
     },
+
+    /*
+     * Prevent Next.js from serving an old cached response.
+     */
+    cache: "no-store",
   });
-  
+
   if (!response.ok) {
-    throw new Error(`arXiv API returned status ${response.status}`);
+    throw new Error(
+      `arXiv API returned status ${response.status}`
+    );
   }
-  
-  const xmlText = await response.text();
-  return parseArxivXML(xmlText);
+
+  const xml = await response.text();
+
+  return parseArxivXML(xml);
 }
+
+/*
+ * ---------------------------------------------------------
+ * XML PARSER
+ * ---------------------------------------------------------
+ */
 
 function parseArxivXML(xmlText: string): ArxivPaper[] {
   const papers: ArxivPaper[] = [];
-  
-  // Split by entry tags
+
   const entries = xmlText.split("<entry>");
-  
+
   for (let i = 1; i < entries.length; i++) {
     const entry = entries[i];
-    
-    // Extract ID
+
     const idMatch = entry.match(/<id>(.*?)<\/id>/);
     const id = idMatch ? idMatch[1].trim() : "";
-    
-    // Extract title
-    const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
-    const title = titleMatch ? titleMatch[1].trim().replace(/\s+/g, " ") : "";
-    
-    // Extract authors
+
+    const titleMatch = entry.match(
+      /<title>([\s\S]*?)<\/title>/
+    );
+
+    const title = titleMatch
+      ? titleMatch[1].trim().replace(/\s+/g, " ")
+      : "";
+
     const authors: string[] = [];
-    const authorMatches = entry.matchAll(/<author>[\s\S]*?<name>(.*?)<\/name>[\s\S]*?<\/author>/g);
+
+    const authorMatches = entry.matchAll(
+      /<author>[\s\S]*?<name>(.*?)<\/name>[\s\S]*?<\/author>/g
+    );
+
     for (const match of authorMatches) {
       authors.push(match[1].trim());
     }
-    
-    // Extract abstract
-    const abstractMatch = entry.match(/<summary>([\s\S]*?)<\/summary>/);
-    const abstract = abstractMatch ? abstractMatch[1].trim().replace(/\s+/g, " ") : "";
-    
-    // Extract published date
-    const publishedMatch = entry.match(/<published>(.*?)<\/published>/);
-    const published = publishedMatch ? publishedMatch[1].trim() : "";
-    
-    // Extract updated date
-    const updatedMatch = entry.match(/<updated>(.*?)<\/updated>/);
-    const updated = updatedMatch ? updatedMatch[1].trim() : "";
-    
-    // Extract categories
+
+    const abstractMatch = entry.match(
+      /<summary>([\s\S]*?)<\/summary>/
+    );
+
+    const abstract = abstractMatch
+      ? abstractMatch[1].trim().replace(/\s+/g, " ")
+      : "";
+
+    const publishedMatch = entry.match(
+      /<published>(.*?)<\/published>/
+    );
+
+    const published = publishedMatch
+      ? publishedMatch[1].trim()
+      : "";
+
+    const updatedMatch = entry.match(
+      /<updated>(.*?)<\/updated>/
+    );
+
+    const updated = updatedMatch
+      ? updatedMatch[1].trim()
+      : "";
+
     const categories: string[] = [];
-    const categoryMatches = entry.matchAll(/<category term="(.*?)".*?\/>/g);
+
+    const categoryMatches = entry.matchAll(
+      /<category term="(.*?)".*?\/>/g
+    );
+
     for (const match of categoryMatches) {
       categories.push(match[1]);
     }
-    
-    // Get arXiv URL
-    const arxivUrl = id;
-    
+
     if (id && title) {
       papers.push({
         id,
@@ -294,146 +429,164 @@ function parseArxivXML(xmlText: string): ArxivPaper[] {
         published,
         updated,
         categories,
-        arxivUrl,
+        arxivUrl: id,
       });
     }
   }
-  
+
   return papers;
 }
 
+/*
+ * ---------------------------------------------------------
+ * API ROUTE
+ * ---------------------------------------------------------
+ */
+
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
+    const searchParams =
+      request.nextUrl.searchParams;
+
     const query = searchParams.get("query");
-    
+
     if (!query || query.trim() === "") {
       return NextResponse.json(
-        { error: "Search query is required" },
-        { status: 400 }
+        {
+          error: "Search query is required",
+        },
+        {
+          status: 400,
+        }
       );
     }
-    
-    let papers: ArxivPaper[] = [];
-    
-    // Helper to add delay between requests to avoid rate limiting
-    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-    
-    // STEP 1: Try concept-aware search (requires main concepts together)
-    const { conceptQueries, primaryIndex, groupNames } = buildConceptAwareQuery(query);
-    
-    if (conceptQueries.length > 1) {
-      // Multi-concept query: require all concepts (AND logic)
-      const conceptSearchQuery = conceptQueries.join(' AND ');
-      papers = await fetchPapers(conceptSearchQuery, 30);
-      
-      // If we got good results, rank and return
-      if (papers.length >= 5) {
-        papers = rankPapers(papers, query);
-        papers = papers.slice(0, 15);
-        
-        return NextResponse.json({
-          success: true,
-          count: papers.length,
-          papers,
-        });
-      }
-      
-      // STEP 2: Smart fallback - drop generic concepts, NEVER primary concepts
-      if (papers.length < 5 && conceptQueries.length > 2) {
-        await delay(1000); // Wait 1 second before next request
-        
-        // Build fallback by dropping least important concept
-        // Priority: Keep primary concepts > Keep secondary > Drop generic
-        let fallbackQueries: string[] = [];
-        
-        if (primaryIndex !== null) {
-          // We have a primary concept - keep it and other important concepts
-          // Drop generic concepts like "disease" that are too broad
-          fallbackQueries = conceptQueries.filter((_, idx) => {
-            // Always keep primary
-            if (idx === primaryIndex) return true;
-            
-            // Drop generic concepts (like 'disease')
-            const groupName = groupNames[idx];
-            if (groupName === 'disease' && conceptQueries.length > 2) return false;
-            
-            // Keep everything else
-            return true;
-          });
-        } else {
-          // No primary identified - drop the last concept
-          fallbackQueries = conceptQueries.slice(0, -1);
-        }
-        
-        // Only try fallback if we actually removed something
-        if (fallbackQueries.length < conceptQueries.length && fallbackQueries.length > 0) {
-          const relaxedQuery = fallbackQueries.join(' AND ');
-          const relaxedPapers = await fetchPapers(relaxedQuery, 30);
-          
-          // Combine and deduplicate
-          const existingIds = new Set(papers.map(p => p.id));
-          relaxedPapers.forEach(paper => {
-            if (!existingIds.has(paper.id)) {
-              papers.push(paper);
-              existingIds.add(paper.id);
-            }
-          });
-        }
-        
-        if (papers.length >= 5) {
-          papers = rankPapers(papers, query);
-          papers = papers.slice(0, 15);
-          
-          return NextResponse.json({
-            success: true,
-            count: papers.length,
-            papers,
-          });
-        }
-      }
-    } else {
-      // Single concept or fallback: use the concept query directly
-      const singleConceptQuery = conceptQueries[0] || `ti:"${query}" OR abs:"${query}"`;
-      papers = await fetchPapers(singleConceptQuery, 30);
-    }
-    
-    // STEP 3: If still too few papers, try exact phrase search
+
+    const cleanQuery = query.trim();
+
+    console.log(
+      `[ArXiv Search] User query: "${cleanQuery}"`
+    );
+
+    /*
+     * Build a query based directly on the user's terms.
+     */
+    const searchQuery =
+      buildSearchQuery(cleanQuery);
+
+    console.log(
+      `[ArXiv Search] Generated query: ${searchQuery}`
+    );
+
+    /*
+     * Fetch more than the UI displays.
+     *
+     * This gives the ranking system enough candidates
+     * to select the most relevant 15.
+     */
+    let papers = await fetchPapers(
+      searchQuery,
+      40
+    );
+
+    console.log(
+      `[ArXiv Search] Initial results: ${papers.length}`
+    );
+
+    /*
+     * Rank against the actual query.
+     */
+    papers = rankPapers(
+      papers,
+      cleanQuery
+    );
+
+    /*
+     * If the strict query returned very few papers,
+     * perform ONE controlled phrase search.
+     *
+     * Importantly, we DO NOT search generic words such
+     * as "disease" alone.
+     */
     if (papers.length < 5) {
-      await delay(1000); // Wait before next request
-      
-      const exactSearchQuery = `ti:"${query}" OR abs:"${query}"`;
-      const exactPapers = await fetchPapers(exactSearchQuery, 15);
-      
-      const existingIds = new Set(papers.map(p => p.id));
-      exactPapers.forEach(paper => {
-        if (!existingIds.has(paper.id)) {
-          papers.push(paper);
-          existingIds.add(paper.id);
+      const phraseQuery =
+        `ti:"${cleanQuery}" OR abs:"${cleanQuery}"`;
+
+      console.log(
+        `[ArXiv Search] Phrase fallback: ${phraseQuery}`
+      );
+
+      try {
+        const phrasePapers =
+          await fetchPapers(
+            phraseQuery,
+            20
+          );
+
+        const existingIds =
+          new Set(
+            papers.map(
+              (paper) => paper.id
+            )
+          );
+
+        for (const paper of phrasePapers) {
+          if (
+            !existingIds.has(
+              paper.id
+            )
+          ) {
+            papers.push(paper);
+            existingIds.add(paper.id);
+          }
         }
-      });
+
+        /*
+         * Re-rank after merging.
+         */
+        papers = rankPapers(
+          papers,
+          cleanQuery
+        );
+      } catch (fallbackError) {
+        console.error(
+          "[ArXiv Search] Phrase fallback failed:",
+          fallbackError
+        );
+      }
     }
-    
-    // Rank papers by relevance and recency
-    if (papers.length > 0) {
-      papers = rankPapers(papers, query);
-      papers = papers.slice(0, 15);
-    }
-    
+
+    /*
+     * Final limit for the UI.
+     */
+    papers = papers.slice(0, 15);
+
+    console.log(
+      `[ArXiv Search] Final results: ${papers.length}`
+    );
+
     return NextResponse.json({
       success: true,
       count: papers.length,
       papers,
     });
-    
   } catch (error) {
-    console.error("Error fetching from arXiv:", error);
+    console.error(
+      "[ArXiv Search] Error:",
+      error
+    );
+
     return NextResponse.json(
-      { 
-        error: "Failed to fetch papers from arXiv",
-        details: error instanceof Error ? error.message : "Unknown error"
+      {
+        error:
+          "Failed to fetch papers from arXiv",
+        details:
+          error instanceof Error
+            ? error.message
+            : "Unknown error",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
